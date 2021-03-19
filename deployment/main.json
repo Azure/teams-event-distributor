@@ -1,0 +1,755 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "prefix": {
+      "type": "string",
+      "metadata": {
+        "description": "Prefix for all resources to create uniqueness"
+      }
+    },
+    "locationSecondary": {
+      "type": "string",
+      "metadata": {
+        "description": "Region of the second API Management instance. Needs to be different than the location of the resource group which is being used as the primary location. Must support APIM Consumption tier."
+      }
+    },
+    "loadBalancingMode": {
+      "type": "string",
+      "defaultValue": "default",
+      "metadata": {
+        "description": "Which Load Balancing (LB) mode to use. Default: Random LB with a list of URL that does not exceed 15,000 characters. userLanguage: LB based on user browser language. largeEvent: Random LB with a list of URL that exceedss 15,000 characters (many, long URLs)."
+      },
+      "allowedValues": [
+        "default",
+        "userLanguage",
+        "largeEvent"
+      ]
+    },
+    "backends": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Leave blank if you set the parameter loadBalancingMode to largeEvent. Otherwise: If mode=default: Comma-separated list of backend URLs to which incoming requests will be forwarded to in a random fashion. For example like: https://teams.microsoft.com/l/meetup-join/1,https://teams.microsoft.com/l/meetup-join/2 If mode=userLanguage: List of backend URLs, split by language to which incoming requests will be forwarded based on their browser language and, if there are multiple links per language in a random fashion. Uses English as the fallback. For example like: de=https://teams.microsoft.com/l/meetup-join/19%3ameeting_GERMAN1;fr=https://teams.microsoft.com/l/meetup-join/19%3ameeting_FRENCH1;en=https://teams.microsoft.com/l/meetup-join/19%3ameeting_ENGLISH1,https://teams.microsoft.com/l/meetup-join/19%3ameeting_ENGLISH2"
+      }
+    },
+    "apimPublisherName": {
+      "type": "string",
+      "defaultValue": "Contoso Admin",
+      "metadata": {
+        "description": "API Management Publisher Name"
+      }
+    },
+    "apimPublisherEmail": {
+      "type": "string",
+      "defaultValue": "noreply@contoso.com",
+      "metadata": {
+        "description": "API Management Publisher Email Address"
+      }
+    },
+    "deploymentId": {
+      "type": "string",
+      "defaultValue": "[utcNow()]",
+      "metadata": {
+        "description": "No need to change. ID to be added to the deployment names, such as the run ID of a pipeline. Default to UTC-now timestamp"
+      }
+    }
+  },
+  "functions": [],
+  "variables": {
+    "location": "[resourceGroup().location]",
+    "frontDoorName": "[format('{0}globalfrontdoor', parameters('prefix'))]",
+    "frontdoor_default_dns_name": "[format('{0}.azurefd.net', variables('frontDoorName'))]",
+    "regions": [
+      "[variables('location')]",
+      "[parameters('locationSecondary')]"
+    ]
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Insights/components",
+      "apiVersion": "2018-05-01-preview",
+      "name": "[format('{0}appinsights', parameters('prefix'))]",
+      "location": "[variables('location')]",
+      "kind": "web",
+      "properties": {
+        "Application_Type": "web"
+      }
+    },
+    {
+      "type": "Microsoft.Network/frontDoors",
+      "apiVersion": "2020-05-01",
+      "name": "[variables('frontDoorName')]",
+      "location": "Global",
+      "properties": {
+        "backendPools": [
+          {
+            "name": "BackendAPIMs",
+            "properties": {
+              "copy": [
+                {
+                  "name": "backends",
+                  "count": "[length(range(0, length(variables('regions'))))]",
+                  "input": {
+                    "address": "[reference(resourceId('Microsoft.Resources/deployments', format('apim-{0}-{1}', variables('regions')[range(0, length(variables('regions')))[copyIndex('backends')]], parameters('deploymentId'))), '2019-10-01').outputs.apimHostname.value]",
+                    "backendHostHeader": "[reference(resourceId('Microsoft.Resources/deployments', format('apim-{0}-{1}', variables('regions')[range(0, length(variables('regions')))[copyIndex('backends')]], parameters('deploymentId'))), '2019-10-01').outputs.apimHostname.value]",
+                    "httpPort": 80,
+                    "httpsPort": 443,
+                    "priority": 1,
+                    "weight": 50
+                  }
+                }
+              ],
+              "healthProbeSettings": {
+                "id": "[format('{0}/healthProbeSettings/HealthProbeSetting', resourceId('Microsoft.Network/frontDoors', variables('frontDoorName')))]"
+              },
+              "loadBalancingSettings": {
+                "id": "[format('{0}/loadBalancingSettings/LoadBalancingSettings', resourceId('Microsoft.Network/frontDoors', variables('frontDoorName')))]"
+              }
+            }
+          }
+        ],
+        "frontendEndpoints": [
+          {
+            "name": "DefaultFrontendEndpoint",
+            "properties": {
+              "hostName": "[variables('frontdoor_default_dns_name')]",
+              "sessionAffinityEnabledState": "Disabled"
+            }
+          }
+        ],
+        "routingRules": [
+          {
+            "name": "HTTPSRedirect",
+            "properties": {
+              "acceptedProtocols": [
+                "Http"
+              ],
+              "patternsToMatch": [
+                "/*"
+              ],
+              "routeConfiguration": {
+                "@odata.type": "#Microsoft.Azure.FrontDoor.Models.FrontdoorRedirectConfiguration",
+                "redirectProtocol": "HttpsOnly",
+                "redirectType": "Moved"
+              },
+              "frontendEndpoints": [
+                {
+                  "id": "[format('{0}/frontendEndpoints/DefaultFrontendEndpoint', resourceId('Microsoft.Network/frontDoors', variables('frontDoorName')))]"
+                }
+              ]
+            }
+          },
+          {
+            "name": "DefaultBackendForwardRule",
+            "properties": {
+              "acceptedProtocols": [
+                "Https"
+              ],
+              "patternsToMatch": [
+                "/*"
+              ],
+              "routeConfiguration": {
+                "@odata.type": "#Microsoft.Azure.FrontDoor.Models.FrontdoorForwardingConfiguration",
+                "backendPool": {
+                  "id": "[format('{0}/backendPools/BackendAPIMs', resourceId('Microsoft.Network/frontDoors', variables('frontDoorName')))]"
+                },
+                "forwardingProtocol": "HttpsOnly"
+              },
+              "frontendEndpoints": [
+                {
+                  "id": "[format('{0}/frontendEndpoints/DefaultFrontendEndpoint', resourceId('Microsoft.Network/frontDoors', variables('frontDoorName')))]"
+                }
+              ]
+            }
+          }
+        ],
+        "healthProbeSettings": [
+          {
+            "name": "HealthProbeSetting",
+            "properties": {
+              "healthProbeMethod": "HEAD",
+              "path": "/healthz",
+              "protocol": "Https",
+              "intervalInSeconds": 30
+            }
+          }
+        ],
+        "loadBalancingSettings": [
+          {
+            "name": "LoadBalancingSettings",
+            "properties": {
+              "additionalLatencyMilliseconds": 500,
+              "sampleSize": 4,
+              "successfulSamplesRequired": 2
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "apim"
+      ]
+    },
+    {
+      "type": "Microsoft.Portal/dashboards",
+      "apiVersion": "2015-08-01-preview",
+      "name": "[guid(resourceGroup().name, parameters('prefix'), 'dashboard')]",
+      "location": "[variables('location')]",
+      "tags": {
+        "hidden-title": "Teams Distributor Statistics"
+      },
+      "properties": {
+        "lenses": {
+          "0": {
+            "order": 0,
+            "parts": {
+              "0": {
+                "position": {
+                  "colSpan": 10,
+                  "rowSpan": 5,
+                  "x": 0,
+                  "y": 0
+                },
+                "metadata": {
+                  "type": "Extension/Microsoft_OperationsManagementSuite_Workspace/PartType/LogsDashboardPart",
+                  "inputs": [
+                    {
+                      "name": "Scope",
+                      "value": {
+                        "resourceIds": [
+                          "[resourceId('Microsoft.Insights/components', format('{0}appinsights', parameters('prefix')))]"
+                        ]
+                      }
+                    },
+                    {
+                      "name": "Dimensions",
+                      "value": {
+                        "xAxis": {
+                          "name": "timestamp",
+                          "type": "datetime"
+                        },
+                        "yAxis": [
+                          {
+                            "name": "Number of Requests",
+                            "type": "long"
+                          }
+                        ],
+                        "splitBy": [
+                          {
+                            "name": "Backend",
+                            "type": "string"
+                          }
+                        ],
+                        "aggregation": "Sum"
+                      }
+                    },
+                    {
+                      "name": "PartId",
+                      "value": "[guid(resourceGroup().name, 'part0')]"
+                    },
+                    {
+                      "name": "Version",
+                      "value": "2.0"
+                    },
+                    {
+                      "name": "TimeRange",
+                      "value": "PT30M"
+                    },
+                    {
+                      "name": "Query",
+                      "value": "set query_bin_auto_size=5m;\r\nrequests\r\n| extend Backend=tostring(customDimensions['Response-location'])\r\n| where Backend != \"\"\r\n| summarize ['Number of Requests']=count() by Backend, bin_auto(timestamp)\r\n| render areachart"
+                    },
+                    {
+                      "name": "PartTitle",
+                      "value": "Forwarded Requests per Backend"
+                    },
+                    {
+                      "name": "PartSubTitle",
+                      "value": "On 5-Minute aggregation"
+                    },
+                    {
+                      "name": "ControlType",
+                      "value": "FrameControlChart"
+                    },
+                    {
+                      "name": "SpecificChart",
+                      "value": "StackedArea"
+                    }
+                  ]
+                }
+              },
+              "1": {
+                "position": {
+                  "colSpan": 6,
+                  "rowSpan": 5,
+                  "x": 10,
+                  "y": 0
+                },
+                "metadata": {
+                  "type": "Extension/Microsoft_OperationsManagementSuite_Workspace/PartType/LogsDashboardPart",
+                  "inputs": [
+                    {
+                      "name": "Scope",
+                      "value": {
+                        "resourceIds": [
+                          "[resourceId('Microsoft.Insights/components', format('{0}appinsights', parameters('prefix')))]"
+                        ]
+                      }
+                    },
+                    {
+                      "name": "Dimensions",
+                      "value": {
+                        "xAxis": {
+                          "name": "Region",
+                          "type": "string"
+                        },
+                        "yAxis": [
+                          {
+                            "name": "Count",
+                            "type": "long"
+                          }
+                        ],
+                        "splitBy": [],
+                        "aggregation": "Sum"
+                      }
+                    },
+                    {
+                      "name": "PartId",
+                      "value": "[guid(resourceGroup().name, 'part1')]"
+                    },
+                    {
+                      "name": "Version",
+                      "value": "2.0"
+                    },
+                    {
+                      "name": "TimeRange",
+                      "value": "PT30M"
+                    },
+                    {
+                      "name": "Query",
+                      "value": "requests\r\n| summarize Count=count() by Region=tostring(customDimensions.Region)\r\n| render piechart"
+                    },
+                    {
+                      "name": "PartTitle",
+                      "value": "Handled requests per APIM Region"
+                    },
+                    {
+                      "name": "PartSubTitle",
+                      "value": "As load-balanced by Front Door"
+                    },
+                    {
+                      "name": "ControlType",
+                      "value": "FrameControlChart"
+                    },
+                    {
+                      "name": "SpecificChart",
+                      "value": "Pie"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/components', format('{0}appinsights', parameters('prefix')))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "apim",
+        "count": "[length(variables('regions'))]"
+      },
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2019-10-01",
+      "name": "[format('apim-{0}-{1}', variables('regions')[copyIndex()], parameters('deploymentId'))]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "applicationInsightsName": {
+            "value": "[format('{0}appinsights', parameters('prefix'))]"
+          },
+          "location": {
+            "value": "[variables('regions')[copyIndex()]]"
+          },
+          "backends": {
+            "value": "[parameters('backends')]"
+          },
+          "prefix": {
+            "value": "[parameters('prefix')]"
+          },
+          "publisherEmail": {
+            "value": "[parameters('apimPublisherEmail')]"
+          },
+          "publisherName": {
+            "value": "[parameters('apimPublisherName')]"
+          },
+          "loadBalancingMode": {
+            "value": "[parameters('loadBalancingMode')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "prefix": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "publisherEmail": {
+              "type": "string"
+            },
+            "publisherName": {
+              "type": "string"
+            },
+            "backends": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "loadBalancingMode": {
+              "type": "string",
+              "defaultValue": "default",
+              "allowedValues": [
+                "default",
+                "userLanguage",
+                "largeEvent"
+              ]
+            },
+            "applicationInsightsName": {
+              "type": "string"
+            },
+            "sasTokenStart": {
+              "type": "string",
+              "defaultValue": "[utcNow('yyyy-MM-ddTHH:mm:ssZ')]"
+            },
+            "sasTokenExpiry": {
+              "type": "string",
+              "defaultValue": "[dateTimeAdd(utcNow('u'), 'P2Y', 'yyyy-MM-ddTHH:mm:ssZ')]"
+            }
+          },
+          "functions": [],
+          "variables": {
+            "useDefaultLb": "[equals(parameters('loadBalancingMode'), 'default')]",
+            "useTableStorage": "[equals(parameters('loadBalancingMode'), 'largeEvent')]",
+            "useLanguageRouter": "[equals(parameters('loadBalancingMode'), 'userLanguage')]",
+            "tableName": "Urls",
+            "accountSasProperties": {
+              "signedServices": "t",
+              "signedPermission": "rl",
+              "signedResourceTypes": "o",
+              "signedStart": "[parameters('sasTokenStart')]",
+              "signedExpiry": "[parameters('sasTokenExpiry')]"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2019-06-01",
+              "name": "[format('stg{0}{1}', take(parameters('location'), 8), uniqueString(parameters('prefix'), parameters('location'), 'stg'))]",
+              "location": "[parameters('location')]",
+              "kind": "StorageV2",
+              "sku": {
+                "name": "Standard_ZRS",
+                "tier": "Standard"
+              },
+              "properties": {
+                "supportsHttpsTrafficOnly": true
+              }
+            },
+            {
+              "condition": "[variables('useTableStorage')]",
+              "type": "Microsoft.Storage/storageAccounts/tableServices/tables",
+              "apiVersion": "2019-06-01",
+              "name": "[format('{0}/default/{1}', format('stg{0}{1}', take(parameters('location'), 8), uniqueString(parameters('prefix'), parameters('location'), 'stg')), variables('tableName'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', format('stg{0}{1}', take(parameters('location'), 8), uniqueString(parameters('prefix'), parameters('location'), 'stg')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}{1}apim', parameters('prefix'), parameters('location'))]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Consumption",
+                "capacity": 0
+              },
+              "properties": {
+                "publisherEmail": "[parameters('publisherEmail')]",
+                "publisherName": "[parameters('publisherName')]",
+                "customProperties": {
+                  "Microsoft.WindowsAzure.ApiManagement.Gateway.Protocols.Server.Http2": "true"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/apis",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location')))]",
+              "properties": {
+                "apiRevision": "1",
+                "displayName": "GetBackend",
+                "subscriptionRequired": false,
+                "protocols": [
+                  "https"
+                ],
+                "path": ""
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', format('{0}{1}apim', parameters('prefix'), parameters('location')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/apis",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/apimhealthz', format('{0}{1}apim', parameters('prefix'), parameters('location')))]",
+              "properties": {
+                "apiRevision": "1",
+                "displayName": "APIM Healthz",
+                "subscriptionRequired": false,
+                "protocols": [
+                  "https"
+                ],
+                "path": "healthz"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', format('{0}{1}apim', parameters('prefix'), parameters('location')))]"
+              ]
+            },
+            {
+              "condition": "[variables('useDefaultLb')]",
+              "type": "Microsoft.ApiManagement/service/apis/operations",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/getbackendfrompolicy', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location'))))]",
+              "properties": {
+                "displayName": "Get Backend From Policy",
+                "method": "GET",
+                "urlTemplate": "/"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/apis', split(format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[0], split(format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[1])]"
+              ]
+            },
+            {
+              "condition": "[variables('useTableStorage')]",
+              "type": "Microsoft.ApiManagement/service/apis/operations",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/getbackendfromtable', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location'))))]",
+              "properties": {
+                "displayName": "Get Backend From Table Storage",
+                "method": "GET",
+                "urlTemplate": "/"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/apis', split(format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[0], split(format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[1])]"
+              ]
+            },
+            {
+              "condition": "[variables('useLanguageRouter')]",
+              "type": "Microsoft.ApiManagement/service/apis/operations",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/getbackendbylanguage', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location'))))]",
+              "properties": {
+                "displayName": "Get Backend by User Language",
+                "method": "GET",
+                "urlTemplate": "/"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/apis', split(format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[0], split(format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[1])]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/apis/operations",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/apimhealth', format('{0}/apimhealthz', format('{0}{1}apim', parameters('prefix'), parameters('location'))))]",
+              "properties": {
+                "displayName": "ApimHealth",
+                "method": "HEAD",
+                "urlTemplate": "/"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/apis', split(format('{0}/apimhealthz', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[0], split(format('{0}/apimhealthz', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[1])]"
+              ]
+            },
+            {
+              "condition": "[variables('useDefaultLb')]",
+              "type": "Microsoft.ApiManagement/service/apis/operations/policies",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/policy', format('{0}/getbackendfrompolicy', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location')))))]",
+              "properties": {
+                "format": "xml",
+                "value": "<policies>\r\n    <inbound>\r\n        <base />\r\n        <return-response>\r\n            <set-status code=\"302\" />\r\n            <set-header name=\"X-Apim-Region\" exists-action=\"override\">\r\n                <value>@(context.Deployment.Region)</value>\r\n            </set-header>\r\n            <set-header name=\"Location\" exists-action=\"override\">\r\n                <value>@{\r\n                    var backends = \"{{backend-urls}}\".Split(',');\r\n                    var i = new Random(context.RequestId.GetHashCode()).Next(0, backends.Length);\r\n                    return backends[i];\r\n                }</value>\r\n            </set-header>\r\n        </return-response>\r\n    </inbound>\r\n    <backend>\r\n        <base />\r\n    </backend>\r\n    <outbound>\r\n        <base />\r\n    </outbound>\r\n    <on-error>\r\n        <base />\r\n    </on-error>\r\n</policies>"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/namedValues', split(format('{0}/backend-urls', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[0], split(format('{0}/backend-urls', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[1])]",
+                "[resourceId('Microsoft.ApiManagement/service/apis/operations', split(format('{0}/getbackendfrompolicy', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location')))), '/')[0], split(format('{0}/getbackendfrompolicy', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location')))), '/')[1], split(format('{0}/getbackendfrompolicy', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location')))), '/')[2])]"
+              ]
+            },
+            {
+              "condition": "[variables('useLanguageRouter')]",
+              "type": "Microsoft.ApiManagement/service/apis/operations/policies",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/policy', format('{0}/getbackendbylanguage', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location')))))]",
+              "properties": {
+                "format": "xml",
+                "value": "<policies>\r\n    <inbound>\r\n        <base />\r\n        <return-response>\r\n            <set-status code=\"302\" />\r\n            <set-header name=\"X-Apim-Region\" exists-action=\"override\">\r\n                <value>@(context.Deployment.Region)</value>\r\n            </set-header>\r\n            <set-header name=\"Location\" exists-action=\"override\">\r\n                <value>@{\r\n                    var dict = \"{{backend-urls}}\".Split(';').Select(item => item.Split('=')).ToDictionary(s => s[0], s => s[1].Split(','));\r\n\r\n                    string[] languageUrls;\r\n                    // If the query parameter \"lang\" is present and the requested language exists in the list, we use that. Otherwise we use the header Accept-Language\r\n                    var langQueryParam = context.Request.OriginalUrl.Query.GetValueOrDefault(\"lang\", \"\").ToLower();\r\n                    if(!dict.TryGetValue(langQueryParam, out languageUrls))\r\n                    {\r\n                        var userLanguage = context.Request.Headers.GetValueOrDefault(\"Accept-Language\", \"en\");\r\n                        // Sample values for Accept-Language: \"Accept-Language: de\"  \"Accept-Language: de-CH\"  \"Accept-Language: en-US,en;q=0.5\"\r\n                        if(userLanguage.Contains(\",\"))\r\n                        {\r\n                            userLanguage = userLanguage.Split(',')[0];\r\n                        }\r\n                        if(userLanguage.Contains(\"-\"))\r\n                        {\r\n                            userLanguage = userLanguage.Split('-')[0];\r\n                        }\r\n                        // If the language from the header exists in the list, we use that, otherwise we default to English\r\n                        languageUrls = dict.ContainsKey(userLanguage) ? dict[userLanguage] : dict[\"en\"];\r\n                    }\r\n                    // If the list only contains more than one entry for the selected language, we pick at random\r\n                    var selectedUrl = languageUrls.Length == 0 ? languageUrls[0] : languageUrls[new Random(context.RequestId.GetHashCode()).Next(0, languageUrls.Length)];\r\n                    return selectedUrl;\r\n                }</value>\r\n            </set-header>\r\n        </return-response>\r\n    </inbound>\r\n    <backend>\r\n        <base />\r\n    </backend>\r\n    <outbound>\r\n        <base />\r\n    </outbound>\r\n    <on-error>\r\n        <base />\r\n    </on-error>\r\n</policies>"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/namedValues', split(format('{0}/backend-urls', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[0], split(format('{0}/backend-urls', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[1])]",
+                "[resourceId('Microsoft.ApiManagement/service/apis/operations', split(format('{0}/getbackendbylanguage', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location')))), '/')[0], split(format('{0}/getbackendbylanguage', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location')))), '/')[1], split(format('{0}/getbackendbylanguage', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location')))), '/')[2])]"
+              ]
+            },
+            {
+              "condition": "[variables('useTableStorage')]",
+              "type": "Microsoft.ApiManagement/service/apis/operations/policies",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/policy', format('{0}/getbackendfromtable', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location')))))]",
+              "properties": {
+                "format": "xml",
+                "value": "<policies>\r\n    <inbound>\r\n        <base />\r\n        <!-- Make outbound request to the table API which holds the list of backend URLs -->\r\n        <send-request mode=\"new\" response-variable-name=\"tableApiResponse\" timeout=\"20\" ignore-error=\"true\">\r\n            <set-url>@(\"{{table-url}}?{{table-sas-token}}&$select=url\")</set-url>\r\n            <set-method>GET</set-method>\r\n            <set-header name=\"Accept\" exists-action=\"override\">\r\n                <value>application/json;odata=nometadata</value>\r\n            </set-header>\r\n        </send-request>\r\n        <set-method>GET</set-method>\r\n        <return-response>\r\n            <set-status code=\"302\" />\r\n            <set-header name=\"X-Apim-Region\" exists-action=\"override\">\r\n                <value>@(context.Deployment.Region)</value>\r\n            </set-header>\r\n            <set-header name=\"Location\" exists-action=\"override\">\r\n                <value>@{\r\n                    try\r\n                    {\r\n                        var urls = ((IResponse) context.Variables[\"tableApiResponse\"]).Body.As<JObject>()[\"value\"];\r\n                        // Generate random rowKey\r\n                        var rowKey = new Random(context.RequestId.GetHashCode()).Next(0, urls.Count());\r\n                        return (string)urls[rowKey][\"url\"];\r\n                    }\r\n                    catch (Exception e)\r\n                    {\r\n                        // If something failed, it is usually because of an transient error. Then we just send the user to the same URL again to retry.\r\n                        return \"/\";\r\n                    }\r\n                }</value>\r\n            </set-header>\r\n        </return-response>\r\n    </inbound>\r\n    <backend>\r\n        <base />\r\n    </backend>\r\n    <outbound>\r\n        <base />\r\n    </outbound>\r\n    <on-error>\r\n        <base />\r\n    </on-error>\r\n</policies>"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/namedValues', split(format('{0}/table-sas-token', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[0], split(format('{0}/table-sas-token', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[1])]",
+                "[resourceId('Microsoft.ApiManagement/service/namedValues', split(format('{0}/table-url', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[0], split(format('{0}/table-url', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[1])]",
+                "[resourceId('Microsoft.ApiManagement/service/apis/operations', split(format('{0}/getbackendfromtable', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location')))), '/')[0], split(format('{0}/getbackendfromtable', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location')))), '/')[1], split(format('{0}/getbackendfromtable', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location')))), '/')[2])]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/apis/operations/policies",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/policy', format('{0}/apimhealth', format('{0}/apimhealthz', format('{0}{1}apim', parameters('prefix'), parameters('location')))))]",
+              "properties": {
+                "format": "xml",
+                "value": "<policies>\r\n    <inbound>\r\n        <base />\r\n        <return-response>\r\n            <set-status code=\"200\" />\r\n        </return-response>\r\n    </inbound>\r\n    <backend>\r\n        <base />\r\n    </backend>\r\n    <outbound>\r\n        <base />\r\n    </outbound>\r\n    <on-error>\r\n        <base />\r\n    </on-error>\r\n</policies>"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/apis/operations', split(format('{0}/apimhealth', format('{0}/apimhealthz', format('{0}{1}apim', parameters('prefix'), parameters('location')))), '/')[0], split(format('{0}/apimhealth', format('{0}/apimhealthz', format('{0}{1}apim', parameters('prefix'), parameters('location')))), '/')[1], split(format('{0}/apimhealth', format('{0}/apimhealthz', format('{0}{1}apim', parameters('prefix'), parameters('location')))), '/')[2])]"
+              ]
+            },
+            {
+              "condition": "[or(variables('useDefaultLb'), variables('useLanguageRouter'))]",
+              "type": "Microsoft.ApiManagement/service/namedValues",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/backend-urls', format('{0}{1}apim', parameters('prefix'), parameters('location')))]",
+              "properties": {
+                "displayName": "backend-urls",
+                "value": "[parameters('backends')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', format('{0}{1}apim', parameters('prefix'), parameters('location')))]"
+              ]
+            },
+            {
+              "condition": "[variables('useTableStorage')]",
+              "type": "Microsoft.ApiManagement/service/namedValues",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/table-url', format('{0}{1}apim', parameters('prefix'), parameters('location')))]",
+              "properties": {
+                "displayName": "table-url",
+                "value": "[format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', format('stg{0}{1}', take(parameters('location'), 8), uniqueString(parameters('prefix'), parameters('location'), 'stg')))).primaryEndpoints.table, variables('tableName'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', format('{0}{1}apim', parameters('prefix'), parameters('location')))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', format('stg{0}{1}', take(parameters('location'), 8), uniqueString(parameters('prefix'), parameters('location'), 'stg')))]"
+              ]
+            },
+            {
+              "condition": "[variables('useTableStorage')]",
+              "type": "Microsoft.ApiManagement/service/namedValues",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/table-sas-token', format('{0}{1}apim', parameters('prefix'), parameters('location')))]",
+              "properties": {
+                "displayName": "table-sas-token",
+                "value": "[listAccountSas(format('stg{0}{1}', take(parameters('location'), 8), uniqueString(parameters('prefix'), parameters('location'), 'stg')), '2019-06-01', variables('accountSasProperties')).accountSasToken]",
+                "secret": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', format('{0}{1}apim', parameters('prefix'), parameters('location')))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', format('stg{0}{1}', take(parameters('location'), 8), uniqueString(parameters('prefix'), parameters('location'), 'stg')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/namedValues",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/logger-credentials', format('{0}{1}apim', parameters('prefix'), parameters('location')))]",
+              "properties": {
+                "displayName": "logger-credentials",
+                "value": "[reference(resourceId('Microsoft.Insights/components', parameters('applicationInsightsName')), '2018-05-01-preview').InstrumentationKey]",
+                "secret": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', format('{0}{1}apim', parameters('prefix'), parameters('location')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/loggers",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/{1}', format('{0}{1}apim', parameters('prefix'), parameters('location')), parameters('applicationInsightsName'))]",
+              "properties": {
+                "loggerType": "applicationInsights",
+                "credentials": {
+                  "instrumentationKey": "{{logger-credentials}}"
+                },
+                "isBuffered": true,
+                "resourceId": "[resourceId('Microsoft.Insights/components', parameters('applicationInsightsName'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', format('{0}{1}apim', parameters('prefix'), parameters('location')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/apis/diagnostics",
+              "apiVersion": "2020-06-01-preview",
+              "name": "[format('{0}/applicationinsights', format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location'))))]",
+              "properties": {
+                "alwaysLog": "allErrors",
+                "httpCorrelationProtocol": "W3C",
+                "verbosity": "information",
+                "loggerId": "[resourceId('Microsoft.ApiManagement/service/loggers', split(format('{0}/{1}', format('{0}{1}apim', parameters('prefix'), parameters('location')), parameters('applicationInsightsName')), '/')[0], split(format('{0}/{1}', format('{0}{1}apim', parameters('prefix'), parameters('location')), parameters('applicationInsightsName')), '/')[1])]",
+                "frontend": {
+                  "response": {
+                    "headers": [
+                      "location"
+                    ]
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/apis', split(format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[0], split(format('{0}/getbackend', format('{0}{1}apim', parameters('prefix'), parameters('location'))), '/')[1])]",
+                "[resourceId('Microsoft.ApiManagement/service/loggers', split(format('{0}/{1}', format('{0}{1}apim', parameters('prefix'), parameters('location')), parameters('applicationInsightsName')), '/')[0], split(format('{0}/{1}', format('{0}{1}apim', parameters('prefix'), parameters('location')), parameters('applicationInsightsName')), '/')[1])]"
+              ]
+            }
+          ],
+          "outputs": {
+            "apimHostname": {
+              "type": "string",
+              "value": "[replace(reference(resourceId('Microsoft.ApiManagement/service', format('{0}{1}apim', parameters('prefix'), parameters('location')))).gatewayUrl, 'https://', '')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/components', format('{0}appinsights', parameters('prefix')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "frontDoorUrl": {
+      "type": "string",
+      "value": "[variables('frontdoor_default_dns_name')]"
+    }
+  },
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.3.104.52030",
+      "templateHash": "5962523844245559369"
+    }
+  }
+}
