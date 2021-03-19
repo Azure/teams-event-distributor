@@ -90,7 +90,7 @@ In this mode, the browser request header `Accept-Language` is being used to dete
 #### Deploy through the Azure Portal
 As an alternative to using command line, you can also deploy through the Azure Portal directly and set the parameters accordingly.
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fsebader%2Fteams-distributor%2Fmain%2Fdeployment%2Fmain.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FAzure%2Fteams-event-distributor%2Fmain%2Fdeployment%2Fmain.json)
 
 ### Test
 Your initial URL - if you did not use a custom domain - will be like [https://{MYPREFIX}globalfrontdoor.azurefd.net]()- To test your setup, simply call this URL from a web browser and you should get redirected to one of your backend URLs. Try this a couple of times and you will see different forwarding targets. Note: Based on your browser or proxy settings, it might be that the forward target gets cached. In this case, just open a second browser (or use a private browsing tab). 
