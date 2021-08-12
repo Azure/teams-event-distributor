@@ -29,7 +29,7 @@ var location = resourceGroup().location
 var frontDoorName = '${prefix}globalfrontdoor'
 var frontdoor_default_dns_name = '${frontDoorName}.azurefd.net'
 
-resource appinsights 'Microsoft.Insights/components@2018-05-01-preview' = {
+resource appinsights 'Microsoft.Insights/components@2020-02-02-preview' = {
   name: '${prefix}appinsights'
   location: location
   kind: 'web'

@@ -22,13 +22,12 @@ var useTableStorage = loadBalancingMode == 'largeEvent'
 var useLanguageRouter = loadBalancingMode == 'userLanguage'
 
 // Because of some issue in bicep/ARM using "if (useTableStorage)" on this resource breaks other dependencies. Thus, we always provision the storage account, even if it is not being used when not running in Table-storage mode.
-resource storageAccount 'Microsoft.Storage/storageAccounts@2019-06-01' = {
+resource storageAccount 'Microsoft.Storage/storageAccounts@2021-04-01' = {
   name: 'stg${take(location, 8)}${uniqueString(prefix, location, 'stg')}'
   location: location
   kind: 'StorageV2'
   sku: {
     name: 'Standard_ZRS'
-    tier: 'Standard'
   }
   properties: {
     supportsHttpsTrafficOnly: true
@@ -37,11 +36,11 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2019-06-01' = {
 
 var tableName = 'Urls'
 
-resource table 'Microsoft.Storage/storageAccounts/tableServices/tables@2019-06-01' = if (useTableStorage) {
+resource table 'Microsoft.Storage/storageAccounts/tableServices/tables@2021-04-01' = if (useTableStorage) {
   name: '${storageAccount.name}/default/${tableName}'
 }
 
-resource apim 'Microsoft.ApiManagement/service@2020-06-01-preview' = {
+resource apim 'Microsoft.ApiManagement/service@2021-01-01-preview' = {
   name: '${prefix}${location}apim'
   location: location
   sku: {
@@ -58,8 +57,9 @@ resource apim 'Microsoft.ApiManagement/service@2020-06-01-preview' = {
   }
 }
 
-resource apiGetbackend 'Microsoft.ApiManagement/service/apis@2020-06-01-preview' = {
-  name: '${apim.name}/getbackend'
+resource apiGetbackend 'Microsoft.ApiManagement/service/apis@2021-01-01-preview' = {
+  parent: apim
+  name: 'getbackend'
   properties: {
     apiRevision: '1'
     displayName: 'GetBackend'
@@ -71,8 +71,9 @@ resource apiGetbackend 'Microsoft.ApiManagement/service/apis@2020-06-01-preview'
   }
 }
 
-resource apiHealthz 'Microsoft.ApiManagement/service/apis@2020-06-01-preview' = {
-  name: '${apim.name}/apimhealthz'
+resource apiHealthz 'Microsoft.ApiManagement/service/apis@2021-01-01-preview' = {
+  parent: apim
+  name: 'apimhealthz'
   properties: {
     apiRevision: '1'
     displayName: 'APIM Healthz'
@@ -85,8 +86,9 @@ resource apiHealthz 'Microsoft.ApiManagement/service/apis@2020-06-01-preview' = 
 }
 
 // Based on the parameter useTableStorage either this operation is being created...
-resource operationGetbackend 'Microsoft.ApiManagement/service/apis/operations@2020-06-01-preview' = if (useDefaultLb) {
-  name: '${apiGetbackend.name}/getbackendfrompolicy'
+resource operationGetbackend 'Microsoft.ApiManagement/service/apis/operations@2021-01-01-preview' = if (useDefaultLb) {
+  parent: apiGetbackend
+  name: 'getbackendfrompolicy'
   properties: {
     displayName: 'Get Backend From Policy'
     method: 'GET'
@@ -95,8 +97,9 @@ resource operationGetbackend 'Microsoft.ApiManagement/service/apis/operations@20
 }
 
 // ... or this operation is being used. This one will retrieve the backend URLs from the Table storage.
-resource operationGetbackendFromTable 'Microsoft.ApiManagement/service/apis/operations@2020-06-01-preview' = if (useTableStorage) {
-  name: '${apiGetbackend.name}/getbackendfromtable'
+resource operationGetbackendFromTable 'Microsoft.ApiManagement/service/apis/operations@2021-01-01-preview' = if (useTableStorage) {
+  parent: apiGetbackend
+  name: 'getbackendfromtable'
   properties: {
     displayName: 'Get Backend From Table Storage'
     method: 'GET'
@@ -105,8 +108,9 @@ resource operationGetbackendFromTable 'Microsoft.ApiManagement/service/apis/oper
 }
 
 // ... or this operation is being used. This one will retrieve the backend URLs from the Table storage.
-resource operationGetbackendByLanguage 'Microsoft.ApiManagement/service/apis/operations@2020-06-01-preview' = if (useLanguageRouter) {
-  name: '${apiGetbackend.name}/getbackendbylanguage'
+resource operationGetbackendByLanguage 'Microsoft.ApiManagement/service/apis/operations@2021-01-01-preview' = if (useLanguageRouter) {
+  parent: apiGetbackend
+  name: 'getbackendbylanguage'
   properties: {
     displayName: 'Get Backend by User Language'
     method: 'GET'
@@ -114,8 +118,9 @@ resource operationGetbackendByLanguage 'Microsoft.ApiManagement/service/apis/ope
   }
 }
 
-resource operationHealthz 'Microsoft.ApiManagement/service/apis/operations@2020-06-01-preview' = {
-  name: '${apiHealthz.name}/apimhealth'
+resource operationHealthz 'Microsoft.ApiManagement/service/apis/operations@2021-01-01-preview' = {
+  parent: apiHealthz
+  name: 'apimhealth'
   properties: {
     displayName: 'ApimHealth'
     method: 'HEAD'
@@ -123,8 +128,9 @@ resource operationHealthz 'Microsoft.ApiManagement/service/apis/operations@2020-
   }
 }
 
-resource getbackendPolicy 'Microsoft.ApiManagement/service/apis/operations/policies@2020-06-01-preview' = if (useDefaultLb) {
-  name: '${operationGetbackend.name}/policy'
+resource getbackendPolicy 'Microsoft.ApiManagement/service/apis/operations/policies@2021-01-01-preview' = if (useDefaultLb) {
+  parent: operationGetbackend
+  name: 'policy'
   dependsOn: [
     namedValueBackends
   ]
@@ -162,8 +168,9 @@ resource getbackendPolicy 'Microsoft.ApiManagement/service/apis/operations/polic
   }
 }
 
-resource getbackendPolicyByLanguage 'Microsoft.ApiManagement/service/apis/operations/policies@2020-06-01-preview' = if (useLanguageRouter) {
-  name: '${operationGetbackendByLanguage.name}/policy'
+resource getbackendPolicyByLanguage 'Microsoft.ApiManagement/service/apis/operations/policies@2021-01-01-preview' = if (useLanguageRouter) {
+  parent: operationGetbackendByLanguage
+  name: 'policy'
   dependsOn: [
     namedValueBackends
   ]
@@ -221,8 +228,9 @@ resource getbackendPolicyByLanguage 'Microsoft.ApiManagement/service/apis/operat
   }
 }
 
-resource getbackendFromTablePolicy 'Microsoft.ApiManagement/service/apis/operations/policies@2020-06-01-preview' = if (useTableStorage) {
-  name: '${operationGetbackendFromTable.name}/policy'
+resource getbackendFromTablePolicy 'Microsoft.ApiManagement/service/apis/operations/policies@2021-01-01-preview' = if (useTableStorage) {
+  parent: operationGetbackendFromTable
+  name: 'policy'
   dependsOn: [
     namedValueTableUrl
     namedValueTableSasToken
@@ -278,8 +286,9 @@ resource getbackendFromTablePolicy 'Microsoft.ApiManagement/service/apis/operati
   }
 }
 
-resource healthzPolicy 'Microsoft.ApiManagement/service/apis/operations/policies@2020-06-01-preview' = {
-  name: '${operationHealthz.name}/policy'
+resource healthzPolicy 'Microsoft.ApiManagement/service/apis/operations/policies@2021-01-01-preview' = {
+  parent: operationHealthz
+  name: 'policy'
   properties: {
     format: 'xml'
     value: '''
@@ -304,8 +313,9 @@ resource healthzPolicy 'Microsoft.ApiManagement/service/apis/operations/policies
 }
 
 // Section: named values for backend urls
-resource namedValueBackends 'Microsoft.ApiManagement/service/namedValues@2020-06-01-preview' = if (useDefaultLb || useLanguageRouter) {
-  name: '${apim.name}/backend-urls'
+resource namedValueBackends 'Microsoft.ApiManagement/service/namedValues@2021-01-01-preview' = if (useDefaultLb || useLanguageRouter) {
+  parent: apim
+  name: 'backend-urls'
   properties: {
     displayName: 'backend-urls'
     value: backends
@@ -313,8 +323,9 @@ resource namedValueBackends 'Microsoft.ApiManagement/service/namedValues@2020-06
 }
 
 // Section: named values for Table storage backend
-resource namedValueTableUrl 'Microsoft.ApiManagement/service/namedValues@2020-06-01-preview' = if (useTableStorage) {
-  name: '${apim.name}/table-url'
+resource namedValueTableUrl 'Microsoft.ApiManagement/service/namedValues@2021-01-01-preview' = if (useTableStorage) {
+  parent: apim
+  name: 'table-url'
   properties: {
     displayName: 'table-url'
     value: '${storageAccount.properties.primaryEndpoints.table}${tableName}'
@@ -330,8 +341,9 @@ var accountSasProperties = {
   signedExpiry: sasTokenExpiry
 }
 
-resource namedValueTableSasToken 'Microsoft.ApiManagement/service/namedValues@2020-06-01-preview' = if (useTableStorage) {
-  name: '${apim.name}/table-sas-token'
+resource namedValueTableSasToken 'Microsoft.ApiManagement/service/namedValues@2021-01-01-preview' = if (useTableStorage) {
+  parent: apim
+  name: 'table-sas-token'
   properties: {
     displayName: 'table-sas-token'
     value: listAccountSas(storageAccount.name, storageAccount.apiVersion, accountSasProperties).accountSasToken
@@ -341,8 +353,9 @@ resource namedValueTableSasToken 'Microsoft.ApiManagement/service/namedValues@20
 
 // Section: Logging
 
-resource namedValueAppInsightsKey 'Microsoft.ApiManagement/service/namedValues@2020-06-01-preview' = {
-  name: '${apim.name}/logger-credentials'
+resource namedValueAppInsightsKey 'Microsoft.ApiManagement/service/namedValues@2021-01-01-preview' = {
+  parent: apim
+  name: 'logger-credentials'
   properties: {
     displayName: 'logger-credentials'
     value: appInsights.properties.InstrumentationKey
@@ -350,8 +363,9 @@ resource namedValueAppInsightsKey 'Microsoft.ApiManagement/service/namedValues@2
   }
 }
 
-resource apimLogger 'Microsoft.ApiManagement/service/loggers@2020-06-01-preview' = {
-  name: '${apim.name}/${appInsights.name}'
+resource apimLogger 'Microsoft.ApiManagement/service/loggers@2021-01-01-preview' = {
+  parent: apim
+  name: appInsights.name
   properties: {
     loggerType: 'applicationInsights'
     credentials: {
@@ -360,10 +374,15 @@ resource apimLogger 'Microsoft.ApiManagement/service/loggers@2020-06-01-preview'
     isBuffered: true
     resourceId: appInsights.id
   }
+
+  dependsOn: [
+    namedValueAppInsightsKey
+  ]
 }
 
-resource apiGetbackendDiagnostics 'Microsoft.ApiManagement/service/apis/diagnostics@2020-06-01-preview' = {
-  name: '${apiGetbackend.name}/applicationinsights'
+resource apiGetbackendDiagnostics 'Microsoft.ApiManagement/service/apis/diagnostics@2021-01-01-preview' = {
+  parent: apiGetbackend
+  name: 'applicationinsights'
   properties: {
     alwaysLog: 'allErrors'
     httpCorrelationProtocol: 'W3C'
@@ -380,7 +399,7 @@ resource apiGetbackendDiagnostics 'Microsoft.ApiManagement/service/apis/diagnost
 }
 
 // Use AppInsights which was created outside of this module
-resource appInsights 'Microsoft.Insights/components@2018-05-01-preview' existing = {
+resource appInsights 'Microsoft.Insights/components@2020-02-02-preview' existing = {
   name: applicationInsightsName
 }
 
