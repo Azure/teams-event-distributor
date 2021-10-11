@@ -16,9 +16,9 @@ Note: The unique URL can be changed by either using a URL shortener like Bitly o
 The solution deploys the following components:
 
 - Azure Front Door for global load balancing and failover
-- 2x Azure API Management in Consumption tier, in two different regions for resiliency
+- n number of Azure API Management instances in Consumption tier, in different regions for resiliency
 - Azure Application Insights including on Azure Portal Dashboard for monitoring
-- 2x Azure Storage Accounts with one Table storage each. These are only being used (and only will incur costs) when using the table-storage mode for a high number of backend URLs
+- n number of Azure Storage Accounts with one Table storage each. These are only being used (and only will incur costs) when using the table-storage mode for a high number of backend URLs
 
 <p align="center">
     <br>
@@ -47,18 +47,18 @@ az group create -n myresource-group -l northeurope
 There are three different deployment types available, based on how many backend URLs you need to distribute traffic to. (the reason for this is a length limitation in API Management Policy definitions).
 
 #### Default Policy-based mode - **this mode should be applicable to most users.**
-Use this when the list of all your backend URLs is not longer than approx. 14,000 characters. In this case the list of URLs is injected directly into the policy of API Management.
+Use this when the list of all your backend URLs combined is not longer than approx. 14,000 characters. In this case the list of URLs is injected directly into the policy of API Management.
 
-Use this command to deploy the ARM template - replace the **backends** parameter with your individual, comma-separated list of Event URLs and **locationSecondary** based on your preferences.
+Use this command to deploy the ARM template - replace the **backends** parameter with your individual, comma-separated list of Event URLs and **additionalLocations** based on your preferences.
 ```
-az deployment group create -g  myresource-group --template-file .\main.bicep -p prefix=myprefix -p locationSecondary=westeurope -p loadBalancingMode=default -p backends="https://teams.microsoft.com/l/meetup-join/1,https://teams.microsoft.com/l/meetup-join/2,https://teams.microsoft.com/l/meetup-join/3"
+az deployment group create -g  myresource-group --template-file .\main.bicep -p prefix=myprefix -p additionalLocations="['eastus2','westeurope']" -p loadBalancingMode=default -p backends="https://teams.microsoft.com/l/meetup-join/1,https://teams.microsoft.com/l/meetup-join/2,https://teams.microsoft.com/l/meetup-join/3"
 ```
 
-#### Table-storage mode - for high number of backend URLs
+#### Table-storage mode - for large number of backend URLs
 In this case the URLs must be imported after the ARM template deployment into Table storage accounts and APIM fetches them from there. See below for details on this. \
-Use this command to deploy the ARM template - replace the **locationSecondary** parameter based on your preferences. Note that we are not specifying the URLs here yet and instead setting the parameter `loadBalancingMode=largeEvent`.
+Use this command to deploy the ARM template - replace the **additionalLocations** parameter based on your preferences. Note that we are not specifying the URLs here yet and instead setting the parameter `loadBalancingMode=largeEvent`.
 ```
-az deployment group create -g  myresource-group --template-file .\main.bicep -p prefix=myprefix -p locationSecondary=westeurope -p loadBalancingMode=largeEvent
+az deployment group create -g  myresource-group --template-file .\main.bicep -p prefix=myprefix -p additionalLocations="['eastus2','westeurope']" -p loadBalancingMode=largeEvent
 ```
 
 After the deployment finished, you need to import the list of URLs into both Table storage accounts. Use the `import-urls-to-table.ps1` PowerShell script in the `testing` folder for this purpose.
@@ -68,7 +68,7 @@ After the deployment finished, you need to import the list of URLs into both Tab
 To use this more, your list of backends must be formatted different. See the following example.
 **Note**: This mode currently only supports a list of URLs that is not longer than approx. 14,000 characters.
 
-Use this command to deploy the ARM template - replace the **backends** parameter with your individual, semicolon-separated list of Event URLs, starting with the language code. Within each language code you can have multiple URLs. In this case, those will be load-balanced as well. There always needs to be at least one URL for English (`en`) as this is used as the fallback option. Also, update **locationSecondary** based on your preferences.
+Use this command to deploy the ARM template - replace the **backends** parameter with your individual, semicolon-separated list of Event URLs, starting with the language code. Within each language code you can have multiple URLs. In this case, those will be load-balanced as well. There always needs to be at least one URL for English (`en`) as this is used as the fallback option. Also, update **additionalLocations** based on your preferences.
 
 Let's take the following example:
 - For **French (fr)**, you have the following three URLs to redirect and load balance users to: **https://URL_FR_1**, **https://URL_FR_2** and **https://URL_FR_3**
@@ -81,7 +81,7 @@ Here is how you will create the "backends" string for such a configuration:
 Note: all other languages, not specified in the backends definition, will fall into "en" as a default.
 
 ```
-az deployment group create -g  myresource-group --template-file .\main.bicep -p prefix=myprefix -p locationSecondary=westeurope -p loadBalancingMode=userLanguage -p backends="fr=https://URL_FR_1,https://URL_FR_2,https://URL_FR_3;de=https://URL_GE_1;en=https://URL_EN_1,https://URL_EN_2"
+az deployment group create -g  myresource-group --template-file .\main.bicep -p prefix=myprefix -p additionalLocations="['eastus2','westeurope']" -p loadBalancingMode=userLanguage -p backends="fr=https://URL_FR_1,https://URL_FR_2,https://URL_FR_3;de=https://URL_GE_1;en=https://URL_EN_1,https://URL_EN_2"
 ```
 
 In this mode, the browser request header `Accept-Language` is being used to determine which URL to use. Alternatively the query parameter `?lang=` can be set, which will then take precedence. For example: [https://{MYPREFIX}globalfrontdoor.azurefd.net?lang=fr]() to force French as the language.
