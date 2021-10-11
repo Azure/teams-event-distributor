@@ -1,8 +1,8 @@
 @description('Prefix for all resources to create uniqueness')
 param prefix string
 
-@description('Region of the second API Management instance. Needs to be different than the location of the resource group which is being used as the primary location. Must support APIM Consumption tier.')
-param locationSecondary string
+@description('List of regions for additional API Management instances. Needs to be different than the location of the resource group which is being used as the primary location. Must support APIM Consumption tier.')
+param additionalLocations array
 
 @allowed([
   'default'
@@ -38,10 +38,7 @@ resource appinsights 'Microsoft.Insights/components@2020-02-02-preview' = {
   }
 }
 
-var regions = [
-  location
-  locationSecondary
-]
+var regions = concat(array(location), additionalLocations)
 
 module apim 'module_apim.bicep' = [for region in regions: {
   name: 'apim-${region}-${deploymentId}'
@@ -90,7 +87,7 @@ resource frontdoor 'Microsoft.Network/frontDoors@2020-05-01' = {
         }
       }
       /*
-      // Enable this if you have a custom domain name available
+      // Enable this if you have a custom domain name available. Also enable the frontend in the routing rules below
       {
         name: 'CustomDomainFrontendEndpoint'
         properties: {
@@ -119,6 +116,12 @@ resource frontdoor 'Microsoft.Network/frontDoors@2020-05-01' = {
             {
               id: '${resourceId('Microsoft.Network/frontDoors', frontDoorName)}/frontendEndpoints/DefaultFrontendEndpoint'
             }
+            /*
+            // Enable this if you have a custom domain name available
+            {
+              id: '${resourceId('Microsoft.Network/frontDoors', frontDoorName)}/frontendEndpoints/CustomDomainFrontendEndpoint'
+            }
+            */
           ]
         }
       }
@@ -142,6 +145,12 @@ resource frontdoor 'Microsoft.Network/frontDoors@2020-05-01' = {
             {
               id: '${resourceId('Microsoft.Network/frontDoors', frontDoorName)}/frontendEndpoints/DefaultFrontendEndpoint'
             }
+            /*
+            // Enable this if you have a custom domain name available
+            {
+              id: '${resourceId('Microsoft.Network/frontDoors', frontDoorName)}/frontendEndpoints/CustomDomainFrontendEndpoint'
+            }
+            */
           ]
         }
       }

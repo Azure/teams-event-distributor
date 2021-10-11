@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.4.63.48766",
-      "templateHash": "8021498999989865615"
+      "version": "0.4.613.9944",
+      "templateHash": "17883753455617231099"
     }
   },
   "parameters": {
@@ -15,10 +15,10 @@
         "description": "Prefix for all resources to create uniqueness"
       }
     },
-    "locationSecondary": {
-      "type": "string",
+    "additionalLocations": {
+      "type": "array",
       "metadata": {
-        "description": "Region of the second API Management instance. Needs to be different than the location of the resource group which is being used as the primary location. Must support APIM Consumption tier."
+        "description": "List of regions for additional API Management instances. Needs to be different than the location of the resource group which is being used as the primary location. Must support APIM Consumption tier."
       }
     },
     "loadBalancingMode": {
@@ -67,10 +67,7 @@
     "location": "[resourceGroup().location]",
     "frontDoorName": "[format('{0}globalfrontdoor', parameters('prefix'))]",
     "frontdoor_default_dns_name": "[format('{0}.azurefd.net', variables('frontDoorName'))]",
-    "regions": [
-      "[variables('location')]",
-      "[parameters('locationSecondary')]"
-    ]
+    "regions": "[concat(array(variables('location')), parameters('additionalLocations'))]"
   },
   "resources": [
     {
@@ -405,8 +402,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.4.63.48766",
-              "templateHash": "1257827312980034003"
+              "version": "0.4.613.9944",
+              "templateHash": "7597194920867229398"
             }
           },
           "parameters": {
